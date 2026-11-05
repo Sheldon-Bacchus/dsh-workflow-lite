@@ -36,7 +36,11 @@ import {
   MEMORY_TYPES,
   NODE_TYPE,
   type NodeData,
+  type NodePorts,
   type OutputSpec,
+  type PortBinding,
+  type PortBindings,
+  type PortSpec,
   RESOURCE_KINDS,
   RESOURCE_TYPE,
   REUSE_POLICIES,
@@ -60,7 +64,16 @@ import {
 } from './types.ts'
 
 /** node 的 data 键序。 */
-const DATA_KEYS = ['label', 'description', 'icon', 'color', 'prompt', 'output'] as const
+export const DATA_KEYS = [
+  'label',
+  'description',
+  'icon',
+  'color',
+  'prompt',
+  'output',
+  'ports',
+  'bindings',
+] as const
 /** 输入节点的 data 键序。 */
 const INPUT_KEYS = [
   'question',
@@ -188,7 +201,150 @@ export function readNodeData(raw: unknown): NodeData {
     const output = canonicalOutput(specs)
     if (output !== undefined) data.output = output
   }
+  if (isPlainObject(raw.ports)) {
+    const ports = readPorts(raw.ports)
+    if (ports !== undefined) data.ports = ports
+  }
+  if (isPlainObject(raw.bindings)) {
+    const bindings = readBindings(raw.bindings)
+    if (bindings !== undefined) data.bindings = bindings
+  }
   return data
+}
+
+/** 按码位序比较两个字符串（保证稳定排序）。 */
+function compareByCodepoint(a: string, b: string): number {
+  const left = [...a]
+  const right = [...b]
+  const shared = Math.min(left.length, right.length)
+  for (let i = 0; i < shared; i += 1) {
+    const ca = left[i]?.codePointAt(0)
+    const cb = right[i]?.codePointAt(0)
+    if (ca === undefined || cb === undefined) break
+    if (ca !== cb) return ca - cb
+  }
+  return left.length - right.length
+}
+
+/**
+ * 从原始对象里挑出端口声明已知键。
+ * 缺失时不注入空对象，避免污染旧图。
+ */
+export function readPorts(raw: unknown): NodePorts | undefined {
+  if (!isPlainObject(raw)) return undefined
+  const ports: NodePorts = {}
+  let hasAny = false
+  if (Array.isArray(raw.inputs)) {
+    hasAny = true
+    ports.inputs = raw.inputs.map((item) => {
+      if (!isPlainObject(item)) return { name: '', type: '' }
+      const spec: PortSpec = {
+        name: typeof item.name === 'string' ? item.name : '',
+        type: typeof item.type === 'string' ? item.type : '',
+      }
+      if (typeof item.required === 'boolean') spec.required = item.required
+      if (typeof item.multiple === 'boolean') spec.multiple = item.multiple
+      if (typeof item.description === 'string') spec.description = item.description
+      return spec
+    })
+  }
+  if (Array.isArray(raw.outputs)) {
+    hasAny = true
+    ports.outputs = raw.outputs.map((item) => {
+      if (!isPlainObject(item)) return { name: '', type: '' }
+      const spec: PortSpec = {
+        name: typeof item.name === 'string' ? item.name : '',
+        type: typeof item.type === 'string' ? item.type : '',
+      }
+      if (typeof item.required === 'boolean') spec.required = item.required
+      if (typeof item.multiple === 'boolean') spec.multiple = item.multiple
+      if (typeof item.description === 'string') spec.description = item.description
+      return spec
+    })
+  }
+  return hasAny ? ports : undefined
+}
+
+/**
+ * 端口规格的规范写法：固定键序，丢弃空字段（空白描述、false 标志）。
+ */
+export function canonicalPortSpec(spec: PortSpec): PortSpec {
+  const out: Record<string, unknown> = {
+    name: spec.name,
+    type: spec.type,
+  }
+  if (spec.required === true) out.required = true
+  if (spec.multiple === true) out.multiple = true
+  if (typeof spec.description === 'string' && spec.description.trim() !== '') {
+    out.description = spec.description.trim()
+  }
+  return out as unknown as PortSpec
+}
+
+/**
+ * 端口声明的规范写法：按 name 稳定排序（码位序），丢弃空数组与空字段。
+ * 全空时返回 undefined。
+ */
+export function canonicalPorts(ports: NodePorts | undefined): NodePorts | undefined {
+  if (ports === undefined) return undefined
+  const out: NodePorts = {}
+  if (Array.isArray(ports.inputs) && ports.inputs.length > 0) {
+    const specs = ports.inputs
+      .map(canonicalPortSpec)
+      .sort((a, b) => compareByCodepoint(a.name, b.name))
+    if (specs.length > 0) out.inputs = specs
+  }
+  if (Array.isArray(ports.outputs) && ports.outputs.length > 0) {
+    const specs = ports.outputs
+      .map(canonicalPortSpec)
+      .sort((a, b) => compareByCodepoint(a.name, b.name))
+    if (specs.length > 0) out.outputs = specs
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** 从原始对象里挑出具名端口绑定已知键（[inputPortName]: { node, port }）。 */
+export function readBindings(raw: unknown): PortBindings | undefined {
+  if (!isPlainObject(raw)) return undefined
+  const bindings: PortBindings = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof key !== 'string' || key.trim() === '') continue
+    if (
+      isPlainObject(value) &&
+      typeof value.node === 'string' &&
+      typeof value.port === 'string'
+    ) {
+      bindings[key.trim()] = {
+        node: value.node.trim(),
+        port: value.port.trim(),
+      }
+    }
+  }
+  return bindings
+}
+
+/** 具名端口绑定的规范写法：按 inputPortName 稳定排序（码位序），全空返回 undefined。 */
+export function canonicalBindings(bindings: PortBindings | undefined): PortBindings | undefined {
+  if (bindings === undefined) return undefined
+  const keys = Object.keys(bindings).sort(compareByCodepoint)
+  if (keys.length === 0) return undefined
+  const out: PortBindings = {}
+  for (const k of keys) {
+    const b = bindings[k]
+    if (b && typeof b.node === 'string' && typeof b.port === 'string') {
+      out[k] = { node: b.node, port: b.port }
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** 规范化节点数据并提供缺省 bindings（{}）。 */
+export function normalizeNodeData(raw: unknown): NodeData {
+  const data = readNodeData(raw)
+  return {
+    ...data,
+    bindings: data.bindings ?? {},
+  }
 }
 
 /**
@@ -213,7 +369,7 @@ export function outputSpecs(output: NodeData['output']): OutputSpec[] {
   return []
 }
 
-/** 两份 `data` 内容是否相同（产出按规范写法比，数组逐项比）。 */
+/** 两份 `data` 内容是否相同（产出与端口按规范写法比，数组逐项比）。 */
 export function sameNodeData(a: NodeData, b: NodeData): boolean {
   return (
     a.label === b.label &&
@@ -222,7 +378,11 @@ export function sameNodeData(a: NodeData, b: NodeData): boolean {
     a.color === b.color &&
     a.prompt === b.prompt &&
     JSON.stringify(canonicalOutput(a.output) ?? null) ===
-      JSON.stringify(canonicalOutput(b.output) ?? null)
+      JSON.stringify(canonicalOutput(b.output) ?? null) &&
+    JSON.stringify(canonicalPorts(a.ports) ?? null) ===
+      JSON.stringify(canonicalPorts(b.ports) ?? null) &&
+    JSON.stringify(canonicalBindings(a.bindings) ?? null) ===
+      JSON.stringify(canonicalBindings(b.bindings) ?? null)
   )
 }
 
@@ -234,10 +394,22 @@ export function cloneInputData(data: InputData): InputData {
   return copy
 }
 
-/** 深拷一份 `data`（产出数组不和原件共用）。 */
+/** 深拷一份 `data`（产出数组与端口声明不和原件共用）。 */
 export function cloneNodeData(data: NodeData): NodeData {
   const copy: NodeData = { ...data }
   if (Array.isArray(data.output)) copy.output = data.output.map((spec) => ({ ...spec }))
+  if (data.ports !== undefined) {
+    copy.ports = {
+      ...(data.ports.inputs ? { inputs: data.ports.inputs.map((spec) => ({ ...spec })) } : {}),
+      ...(data.ports.outputs ? { outputs: data.ports.outputs.map((spec) => ({ ...spec })) } : {}),
+    }
+  }
+  if (data.bindings !== undefined) {
+    copy.bindings = {}
+    for (const [k, v] of Object.entries(data.bindings)) {
+      copy.bindings[k] = { ...v }
+    }
+  }
   return copy
 }
 
@@ -878,7 +1050,14 @@ function pickNode(node: WorkflowNode): Record<string, unknown> {
   }
   const data: Record<string, unknown> = {}
   for (const key of DATA_KEYS) {
-    const value = key === 'output' ? canonicalOutput(node.data.output) : node.data[key]
+    const value =
+      key === 'output'
+        ? canonicalOutput(node.data.output)
+        : key === 'ports'
+          ? canonicalPorts(node.data.ports)
+          : key === 'bindings'
+            ? canonicalBindings(node.data.bindings)
+            : node.data[key]
     if (value !== undefined) data[key] = value
   }
   return {

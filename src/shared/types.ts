@@ -337,6 +337,28 @@ export interface InputData {
   other?: true
 }
 
+export interface PortSpec {
+  name: string
+  type: string
+  required?: boolean
+  multiple?: boolean
+  description?: string
+}
+
+export interface NodePorts {
+  inputs?: PortSpec[]
+  outputs?: PortSpec[]
+}
+
+/** 具名端口数据绑定源：哪个源节点的哪个输出口。 */
+export interface PortBinding {
+  node: string
+  port: string
+}
+
+/** 节点输入端口绑定表：[输入端口名]: 源节点与源输出口。 */
+export type PortBindings = Record<string, PortBinding>
+
 export interface NodeData {
   /** 显示名。不要求唯一、不参与寻址与排序；缺省或空串时回落渲染 `id`。**不得含换行或 `|`**。 */
   label?: string
@@ -354,6 +376,14 @@ export interface NodeData {
    * - 字符串 = 一个产出文件；数组 = 一个或多个，每个可带生成规则；`false` = 不产出文件。
    */
   output?: string | false | OutputSpec[]
+  /**
+   * 端口声明（具名输入输出口契约；方案 A 节点级边不记录端口，具名数据绑定由独立绑定文档承载）。
+   */
+  ports?: NodePorts
+  /**
+   * 具名端口绑定：{ [inputPortName]: { node: string; port: string } }，一条画布边可承载多条具名绑定。
+   */
+  bindings?: PortBindings
 }
 
 /** 一个产出：文件路径（相对工作区根）+ 可选的生成规则。 */
@@ -487,6 +517,11 @@ export type ValidationCode =
   | 'resource_edge_invalid'
   | 'resource_invalid'
   | 'input_invalid'
+  | 'port_name_duplicate'
+  | 'port_name_empty'
+  | 'port_type_invalid'
+  | 'port_name_conflict'
+  | 'port_conflict'
   // 编译级
   | 'prompt_empty'
   | 'too_many_nodes'
@@ -498,6 +533,11 @@ export type ValidationCode =
   | 'resource_item_empty'
   | 'resource_unwritable'
   | 'memory_invalid'
+  | 'E_BINDING_SOURCE_MISSING'
+  | 'E_BINDING_PORT_MISSING'
+  | 'E_BINDING_NO_EDGE'
+  | 'E_BINDING_TYPE_INCOMPATIBLE'
+  | 'E_BINDING_REQUIRED_MISSING'
   // 警告
   | 'loop_without_exit'
   | 'mixed_conditional_edges'

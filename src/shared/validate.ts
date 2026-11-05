@@ -31,6 +31,7 @@ import {
   WELL_KNOWN_WHEN,
 } from './limits.ts'
 import { idKey, isInput, isResource, isStep, outputSpecs } from './model.ts'
+import { portTypesCompatible } from './linkRules.ts'
 import {
   checkLabel,
   checkName,
@@ -52,6 +53,8 @@ import {
 } from './resources.ts'
 import type {
   InputData,
+  NodePorts,
+  PortSpec,
   ResourceData,
   ResourceItem,
   ValidationCode,
@@ -71,6 +74,8 @@ export interface ValidateOptions {
   dirCollision?: boolean
   /** 记忆库里有没有这条记忆；给了才查（记忆卡引用的不在库里就给警告）。 */
   hasMemory?: (id: string) => boolean
+  /** 端口子类型词表。 */
+  subtypes?: Record<string, string[]>
 }
 
 export interface ValidationReport {
@@ -222,6 +227,9 @@ export function validateDocument(
         )
       }
     }
+    if (node.data.ports !== undefined) {
+      save.push(...checkPorts(node.data.ports, node.id))
+    }
   }
 
   // ── 保存级：边的字段规则与唯一性 ────────────────────────────
@@ -367,6 +375,9 @@ export function validateDocument(
       )
     }
   }
+
+  // ── 编译级：具名端口数据绑定 ─────────────────────────────────
+  compile.push(...checkBindings(document, options.subtypes))
 
   // ── 警告 ────────────────────────────────────────────────────
   for (const node of document.nodes) {
@@ -690,6 +701,239 @@ export function resourceProblem(data: ResourceData): { message: string } | null 
     if (problem !== null) return { message: `第 ${index + 1} 项：${problem.message}` }
   }
   return null
+}
+
+/**
+ * 步骤节点端口声明规则（保存级）：
+ * - 重复端口名（输入内重复、输出内重复）
+ * - 空端口名
+ * - 非法 type（必须是非空字符串）
+ * - 同名同名跨 inputs/outputs 冲突
+ * - required+multiple 允许
+ */
+export function checkPorts(ports: NodePorts, nodeId?: string): ValidationProblem[] {
+  const problems: ValidationProblem[] = []
+  const nodePrefix = nodeId !== undefined ? `节点 ${nodeId} 的` : ''
+  const extra = nodeId !== undefined ? { node: nodeId } : {}
+
+  const inputNames = new Set<string>()
+  const inputDuplicates = new Set<string>()
+  const outputNames = new Set<string>()
+  const outputDuplicates = new Set<string>()
+
+  if (Array.isArray(ports.inputs)) {
+    for (const port of ports.inputs) {
+      const name = typeof port.name === 'string' ? port.name.trim() : ''
+      if (name === '') {
+        problems.push(mk('save', 'port_name_empty', `${nodePrefix}端口名不能为空`, extra))
+      } else if (inputNames.has(name)) {
+        inputDuplicates.add(name)
+      } else {
+        inputNames.add(name)
+      }
+
+      if (typeof port.type !== 'string' || port.type.trim() === '') {
+        problems.push(
+          mk(
+            'save',
+            'port_type_invalid',
+            `${nodePrefix}端口「${name || '(未命名)'}」type 不合法（必须是非空字符串）`,
+            extra,
+          ),
+        )
+      }
+    }
+  }
+
+  for (const name of inputDuplicates) {
+    problems.push(
+      mk('save', 'port_name_duplicate', `${nodePrefix}输入端口名重复：${name}`, extra),
+    )
+  }
+
+  if (Array.isArray(ports.outputs)) {
+    for (const port of ports.outputs) {
+      const name = typeof port.name === 'string' ? port.name.trim() : ''
+      if (name === '') {
+        problems.push(mk('save', 'port_name_empty', `${nodePrefix}端口名不能为空`, extra))
+      } else if (outputNames.has(name)) {
+        outputDuplicates.add(name)
+      } else {
+        outputNames.add(name)
+      }
+
+      if (typeof port.type !== 'string' || port.type.trim() === '') {
+        problems.push(
+          mk(
+            'save',
+            'port_type_invalid',
+            `${nodePrefix}端口「${name || '(未命名)'}」type 不合法（必须是非空字符串）`,
+            extra,
+          ),
+        )
+      }
+    }
+  }
+
+  for (const name of outputDuplicates) {
+    problems.push(
+      mk('save', 'port_name_duplicate', `${nodePrefix}输出端口名重复：${name}`, extra),
+    )
+  }
+
+  for (const name of inputNames) {
+    if (outputNames.has(name)) {
+      problems.push(
+        mk(
+          'save',
+          'port_name_conflict',
+          `${nodePrefix}输入口与输出口存在同名冲突端口：${name}`,
+          extra,
+        ),
+      )
+    }
+  }
+
+  return problems
+}
+
+/**
+ * 校验具名端口绑定规则（编译级）：
+ * - E_BINDING_SOURCE_MISSING：源节点不存在
+ * - E_BINDING_PORT_MISSING：源节点无该输出口 / 本节点无该输入口（未知端口名不静默接受）
+ * - E_BINDING_NO_EDGE：源与目标之间无画布边
+ * - E_BINDING_TYPE_INCOMPATIBLE：端口类型不兼容
+ * - E_BINDING_REQUIRED_MISSING：必填输入未绑定
+ */
+export function checkBindings(
+  document: WorkflowDocument,
+  subtypes?: Record<string, string[]>,
+): ValidationProblem[] {
+  const problems: ValidationProblem[] = []
+  const nodeMap = new Map<string, WorkflowNode>()
+  for (const n of document.nodes) {
+    nodeMap.set(idKey(n.id), n)
+  }
+
+  for (const node of document.nodes) {
+    if (!isStep(node)) continue
+    const inputs = node.data.ports?.inputs ?? []
+    const inputMap = new Map<string, PortSpec>()
+    for (const p of inputs) {
+      if (p.name && p.name.trim() !== '') {
+        inputMap.set(p.name.trim(), p)
+      }
+    }
+
+    const bindings = node.data.bindings ?? {}
+
+    // 1. 检查 bindings 中的每一项绑定
+    for (const [rawInputName, binding] of Object.entries(bindings)) {
+      const inputName = rawInputName.trim()
+      const extra = { node: node.id }
+
+      // 本节点无该输入口（未知端口名不静默接受）
+      if (!inputMap.has(inputName)) {
+        problems.push(
+          mk(
+            'compile',
+            'E_BINDING_PORT_MISSING',
+            `节点 ${node.id} 不存在输入端口「${rawInputName}」`,
+            extra,
+          ),
+        )
+        continue
+      }
+
+      if (!binding || typeof binding !== 'object') continue
+
+      const sourceId = typeof binding.node === 'string' ? binding.node.trim() : ''
+      const sourcePort = typeof binding.port === 'string' ? binding.port.trim() : ''
+
+      const sourceNode = nodeMap.get(idKey(sourceId))
+      if (!sourceNode) {
+        problems.push(
+          mk(
+            'compile',
+            'E_BINDING_SOURCE_MISSING',
+            `节点 ${node.id} 的输入「${inputName}」绑定的源节点「${sourceId}」不存在`,
+            extra,
+          ),
+        )
+        continue
+      }
+
+      // 源节点无该输出口
+      const sourceOutputs = (isStep(sourceNode) ? sourceNode.data.ports?.outputs : undefined) ?? []
+      const sourcePortSpec = sourceOutputs.find((p) => p.name.trim() === sourcePort)
+      if (!sourcePortSpec) {
+        problems.push(
+          mk(
+            'compile',
+            'E_BINDING_PORT_MISSING',
+            `源节点 ${sourceId} 不存在输出端口「${sourcePort}」`,
+            extra,
+          ),
+        )
+        continue
+      }
+
+      // 源与目标之间无画布边
+      const hasEdge = document.edges.some(
+        (e) => idKey(e.source) === idKey(sourceId) && idKey(e.target) === idKey(node.id),
+      )
+      if (!hasEdge) {
+        problems.push(
+          mk(
+            'compile',
+            'E_BINDING_NO_EDGE',
+            `源节点 ${sourceId} 与目标节点 ${node.id} 之间无画布边`,
+            extra,
+          ),
+        )
+        continue
+      }
+
+      // 端口类型不兼容
+      const targetPortSpec = inputMap.get(inputName)!
+      if (!portTypesCompatible(sourcePortSpec.type, targetPortSpec.type, subtypes)) {
+        problems.push(
+          mk(
+            'compile',
+            'E_BINDING_TYPE_INCOMPATIBLE',
+            `源端口「${sourcePort}」（类型 ${sourcePortSpec.type}）与目标输入「${inputName}」（类型 ${targetPortSpec.type}）类型不兼容`,
+            extra,
+          ),
+        )
+      }
+    }
+
+    // 2. 检查必填输入未绑定
+    for (const inputSpec of inputs) {
+      if (inputSpec.required === true) {
+        const trimmedName = inputSpec.name.trim()
+        const b = bindings[trimmedName] ?? bindings[inputSpec.name]
+        if (
+          !b ||
+          typeof b.node !== 'string' ||
+          b.node.trim() === '' ||
+          typeof b.port !== 'string' ||
+          b.port.trim() === ''
+        ) {
+          problems.push(
+            mk(
+              'compile',
+              'E_BINDING_REQUIRED_MISSING',
+              `节点 ${node.id} 的必填输入「${inputSpec.name}」未绑定`,
+              { node: node.id },
+            ),
+          )
+        }
+      }
+    }
+  }
+
+  return problems
 }
 
 /** 两端都在、但种类不成立的线错在哪。 */

@@ -14,11 +14,13 @@
 import { useEffect, useRef, useState } from 'react'
 import type { GraphAnalysis } from '../../shared/graph.ts'
 import { MAX_TEXT_CODEPOINTS } from '../../shared/limits.ts'
-import { canonicalOutput, idKey, isInput, isResource } from '../../shared/model.ts'
+import { canonicalOutput, idKey, isInput, isResource, isStep } from '../../shared/model.ts'
+import { portTypesCompatible } from '../../shared/linkRules.ts'
 import { checkText, checkWhen, isVerdictWhen } from '../../shared/naming.ts'
 import { edgeKind, flowEdges, nodeIndex, outputsOf } from '../../shared/resources.ts'
 import type {
   NodeData,
+  NodePorts,
   StepNode,
   WorkflowDocument,
   WorkflowEdge,
@@ -208,6 +210,13 @@ function NodePanel(props: InspectorProps & { node: StepNode }): React.JSX.Elemen
           }}
         />
 
+        <StepPortsField
+          ports={node.data.ports}
+          node={node}
+          doc={doc}
+          onEdit={onEdit}
+        />
+
         <StepResourcesField
           t={t}
           doc={doc}
@@ -346,6 +355,334 @@ function NodePanel(props: InspectorProps & { node: StepNode }): React.JSX.Elemen
         )}
       </footer>
     </aside>
+  )
+}
+
+export interface StepPortsFieldProps {
+  ports?: NodePorts
+  node?: StepNode
+  doc?: WorkflowDocument
+  onEdit?(action: { type: 'patchNode'; id: string; patch: Partial<NodeData>; merge?: string }): void
+  subtypes?: Record<string, string[]>
+}
+
+/** 步骤节点的端口声明（输入/输出端口契约与数据绑定），老节点无 ports 时不显示。 */
+export function StepPortsField(props: StepPortsFieldProps): React.JSX.Element | null {
+  const { ports, node, doc, onEdit, subtypes } = props
+  if (!ports) return null
+  const inputs = ports.inputs ?? []
+  const outputs = ports.outputs ?? []
+  if (inputs.length === 0 && outputs.length === 0) return null
+
+  const otherStepNodes =
+    doc && node
+      ? doc.nodes.filter((n): n is StepNode => isStep(n) && idKey(n.id) !== idKey(node.id))
+      : []
+
+  return (
+    <section className={css.field} data-testid="wl-step-ports">
+      <div className={css.label}>
+        <span>端口</span>
+        <span className={css.count}>{inputs.length + outputs.length}</span>
+      </div>
+      <div className={css.links}>
+        {inputs.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <p className={css.linkGroup}>输入</p>
+            {inputs.map((port) => {
+              const currentBinding = node?.data.bindings?.[port.name]
+              const candidates: Array<{
+                nodeId: string
+                nodeLabel?: string
+                portName: string
+                type: string
+              }> = []
+
+              let disableReason = ''
+              if (!doc || !node) {
+                disableReason = '无上下文'
+              } else if (otherStepNodes.length === 0) {
+                disableReason = '无可用源节点'
+              } else {
+                for (const src of otherStepNodes) {
+                  const srcOutputs = src.data.ports?.outputs ?? []
+                  for (const outP of srcOutputs) {
+                    if (portTypesCompatible(outP.type, port.type, subtypes)) {
+                      candidates.push({
+                        nodeId: src.id,
+                        nodeLabel: src.data.label,
+                        portName: outP.name,
+                        type: outP.type,
+                      })
+                    }
+                  }
+                }
+                if (candidates.length === 0) {
+                  disableReason = '无类型兼容的输出端口'
+                }
+              }
+
+              return (
+                <div
+                  key={`in-${port.name}`}
+                  data-testid="wl-port-row-in"
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    padding: '4px 8px',
+                    borderRadius: 'calc(6px * var(--wl-round, 1))',
+                    background: 'var(--wl-hover)',
+                    fontSize: 'var(--wl-fs-meta)',
+                  }}
+                  title={port.description}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 6,
+                    }}
+                  >
+                    <span
+                      style={{
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        color: 'var(--wl-text)',
+                      }}
+                    >
+                      {port.name}
+                      {port.required && (
+                        <span
+                          data-testid="wl-port-req"
+                          style={{
+                            color: 'var(--wl-danger, #ef4444)',
+                            marginLeft: 3,
+                            fontWeight: 'bold',
+                          }}
+                          title="必填"
+                        >
+                          *
+                        </span>
+                      )}
+                    </span>
+                    <span
+                      data-testid="wl-port-type"
+                      style={{
+                        flex: 'none',
+                        color: 'var(--wl-text-3)',
+                        fontFamily: 'var(--wl-mono)',
+                        fontSize: 'var(--wl-fs-micro)',
+                        padding: '1px 6px',
+                        borderRadius: 'calc(4px * var(--wl-round, 1))',
+                        background: 'var(--wl-panel)',
+                      }}
+                    >
+                      {port.type}
+                    </span>
+                  </div>
+
+                  {/* 具名绑定下拉选择与已绑定展示 */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      marginTop: 2,
+                    }}
+                  >
+                    {currentBinding ? (
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 6,
+                          width: '100%',
+                        }}
+                      >
+                        <span
+                          data-testid="wl-port-bound-source"
+                          style={{
+                            color: 'var(--wl-primary, #6366f1)',
+                            fontFamily: 'var(--wl-mono)',
+                            fontSize: '11px',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                          title={`来自节点 ${currentBinding.node} 的端口 ${currentBinding.port}`}
+                        >
+                          ← {currentBinding.node}/{currentBinding.port}
+                        </span>
+                        {onEdit && node && (
+                          <button
+                            type="button"
+                            data-testid="wl-clear-binding"
+                            style={{
+                              flex: 'none',
+                              fontSize: '10px',
+                              padding: '1px 5px',
+                              borderRadius: 3,
+                              background: 'transparent',
+                              border: '1px solid var(--wl-line, rgba(255, 255, 255, 0.2))',
+                              color: 'var(--wl-text-2)',
+                              cursor: 'pointer',
+                            }}
+                            onClick={() => {
+                              const next = { ...(node.data.bindings ?? {}) }
+                              delete next[port.name]
+                              onEdit({
+                                type: 'patchNode',
+                                id: node.id,
+                                patch: { bindings: next },
+                              })
+                            }}
+                          >
+                            清除
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          width: '100%',
+                        }}
+                      >
+                        <select
+                          data-testid={`wl-bind-select-${port.name}`}
+                          disabled={candidates.length === 0 || !onEdit || !node}
+                          value=""
+                          title={candidates.length === 0 ? disableReason : '选择源端口'}
+                          style={{
+                            width: '100%',
+                            fontSize: '11px',
+                            padding: '2px 4px',
+                            borderRadius: 'calc(4px * var(--wl-round, 1))',
+                            background: 'var(--wl-panel)',
+                            color: candidates.length === 0 ? 'var(--wl-text-3)' : 'var(--wl-text)',
+                            border: '1px solid var(--wl-line, rgba(255, 255, 255, 0.15))',
+                          }}
+                          onChange={(e) => {
+                            const val = e.currentTarget.value
+                            if (!val || !onEdit || !node) return
+                            const [sNode, sPort] = val.split('::')
+                            const next = { ...(node.data.bindings ?? {}) }
+                            next[port.name] = { node: sNode, port: sPort }
+                            onEdit({
+                              type: 'patchNode',
+                              id: node.id,
+                              patch: { bindings: next },
+                            })
+                          }}
+                        >
+                          <option value="" disabled>
+                            {candidates.length === 0 ? disableReason : '-- 选择源端口 --'}
+                          </option>
+                          {candidates.map((c) => (
+                            <option
+                              key={`${c.nodeId}::${c.portName}`}
+                              value={`${c.nodeId}::${c.portName}`}
+                            >
+                              {c.nodeLabel ? `${c.nodeLabel} (${c.nodeId})` : c.nodeId} / {c.portName} ({c.type})
+                            </option>
+                          ))}
+                        </select>
+                        {candidates.length === 0 && disableReason && (
+                          <span
+                            data-testid="wl-bind-disabled-reason"
+                            style={{
+                              flex: 'none',
+                              fontSize: '10px',
+                              color: 'var(--wl-text-3)',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {disableReason}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+        {outputs.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+              marginTop: inputs.length > 0 ? 6 : 0,
+            }}
+          >
+            <p className={css.linkGroup}>输出</p>
+            {outputs.map((port) => (
+              <div
+                key={`out-${port.name}`}
+                data-testid="wl-port-row-out"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 6,
+                  padding: '4px 8px',
+                  borderRadius: 'calc(6px * var(--wl-round, 1))',
+                  background: 'var(--wl-hover)',
+                  fontSize: 'var(--wl-fs-meta)',
+                }}
+                title={port.description}
+              >
+                <span
+                  style={{
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    color: 'var(--wl-text)',
+                  }}
+                >
+                  {port.name}
+                  {port.required && (
+                    <span
+                      data-testid="wl-port-req"
+                      style={{
+                        color: 'var(--wl-danger, #ef4444)',
+                        marginLeft: 3,
+                        fontWeight: 'bold',
+                      }}
+                      title="必填"
+                    >
+                      *
+                    </span>
+                  )}
+                </span>
+                <span
+                  data-testid="wl-port-type"
+                  style={{
+                    flex: 'none',
+                    color: 'var(--wl-text-3)',
+                    fontFamily: 'var(--wl-mono)',
+                    fontSize: 'var(--wl-fs-micro)',
+                    padding: '1px 6px',
+                    borderRadius: 'calc(4px * var(--wl-round, 1))',
+                    background: 'var(--wl-panel)',
+                  }}
+                >
+                  {port.type}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
   )
 }
 

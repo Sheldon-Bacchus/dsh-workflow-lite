@@ -47,7 +47,8 @@ import type { GraphAnalysis } from '../../shared/graph.ts'
 import { inputKind } from '../../shared/inputs.ts'
 import { MAX_TEXT_CODEPOINTS } from '../../shared/limits.ts'
 import { type MemoryEntry, memoryTitle } from '../../shared/memoryLib.ts'
-import { idKey, isInput, isResource } from '../../shared/model.ts'
+import { idKey, isInput, isResource, isStep } from '../../shared/model.ts'
+import { linkAllowedByPorts } from '../../shared/linkRules.ts'
 import { codepointLength } from '../../shared/naming.ts'
 import { memoryOf } from '../../shared/presets.ts'
 import {
@@ -65,7 +66,9 @@ import type { NodeStatus } from '../../shared/runState.ts'
 import type {
   InputKind,
   MemoryType,
+  NodePorts,
   Point,
+  PortBindings,
   ResourceItem,
   ResourceKind,
   ResourceView,
@@ -152,6 +155,7 @@ import {
   useLast,
 } from './motion.tsx'
 import { cx, useFloat } from './primitives.tsx'
+import { StepCardPorts } from './StepCard.tsx'
 import {
   DisplayBody,
   DisplayContext,
@@ -247,6 +251,8 @@ interface StepRun {
 }
 
 interface StepData extends Record<string, unknown> {
+  ports?: NodePorts
+  bindings?: PortBindings
   title: string
   /** 挂着读写线的连接点（这些点才显示出来）。 */
   used: readonly string[]
@@ -342,6 +348,7 @@ interface LinkData extends Record<string, unknown> {
   /** 条件的种类：决定线色（见 lines.ts）。 */
   when: WhenKind
   back: boolean
+  bindingCount?: number
   text: string
   /** 只在不是缺省时画交接标记：附了说明，或只管先后。 */
   handoff: { note?: string; none: boolean } | null
@@ -582,6 +589,7 @@ const StepCard = memo(function StepCard(props: NodeProps<StepFlowNode>): React.J
       ) : (
         <p className={css.cardBody}>{data.excerpt}</p>
       )}
+      <StepCardPorts ports={data.ports} bindings={data.bindings} />
       <Handle
         id="out"
         type="source"
@@ -826,7 +834,9 @@ const LinkLine = memo(function LinkLine(props: EdgeProps<LinkEdge>): React.JSX.E
   const text = data?.text ?? ''
   const showWhen = text !== '' || data?.back === true
   const handoff = data?.handoff ?? null
+  const bindingCount = data?.bindingCount ?? 0
   const color = data?.color ?? WHEN_COLOR.always
+  const hasLabels = showWhen || handoff !== null || bindingCount > 0
   return (
     <>
       <path
@@ -839,19 +849,23 @@ const LinkLine = memo(function LinkLine(props: EdgeProps<LinkEdge>): React.JSX.E
         id={id}
         path={path}
         interactionWidth={28}
-        style={{ stroke: color }}
+        style={{
+          stroke: color,
+          ...(bindingCount > 0 ? { strokeDasharray: '6 3' } : {}),
+        }}
         {...(markerEnd ? { markerEnd } : {})}
       />
       {data !== undefined && (
         <FlowStreaks path={path} color={color} active={data.active && handoff?.none !== true} />
       )}
-      {(showWhen || handoff !== null) && data !== undefined && (
+      {hasLabels && data !== undefined && (
         <EdgeLabelRenderer>
           {/* 条件在上、交接在下，竖着叠在线的中点：两张卡之间的空隙放不下横排的两块。
               两块都和线同色。 */}
           <div
             className={cx(css.linkLabels, 'nodrag', 'nopan')}
             data-vanish={id}
+            data-testid="wl-link-labels"
             style={
               {
                 transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
@@ -859,6 +873,29 @@ const LinkLine = memo(function LinkLine(props: EdgeProps<LinkEdge>): React.JSX.E
               } as React.CSSProperties
             }
           >
+            {bindingCount > 0 && (
+              <span
+                data-testid="wl-edge-binding-badge"
+                data-binding-count={bindingCount}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minWidth: 16,
+                  height: 16,
+                  padding: '0 4px',
+                  borderRadius: 8,
+                  fontSize: 10,
+                  fontWeight: 600,
+                  background: 'var(--wl-panel, #1e1e24)',
+                  border: '1px solid var(--wl-line, rgba(255, 255, 255, 0.2))',
+                  color: 'var(--wl-text, #fff)',
+                }}
+                title={`具名绑定: ${bindingCount}`}
+              >
+                {bindingCount}
+              </span>
+            )}
             {showWhen && (
               <button
                 type="button"
@@ -1796,6 +1833,25 @@ const FileLine = memo(function FileLine(props: EdgeProps<FileEdge>): React.JSX.E
   )
 })
 
+/** 画布上的连线许可判断：合并现有连接点/卡片语义规则与端口兼容规则 */
+function canvasLinkAllowed(doc: WorkflowDocument, link: HandleLink): boolean {
+  if (!linkAllowed(doc, link)) return false
+  const index = nodeIndex(doc)
+  const source = index.get(idKey(link.source))
+  const target = index.get(idKey(link.target))
+  if (source !== undefined && target !== undefined && isStep(source) && isStep(target)) {
+    if (!linkAllowedByPorts(source.data, target.data)) {
+      return false
+    }
+  }
+  return true
+}
+
+function canvasPreviewLink(doc: WorkflowDocument, link: HandleLink): LinkPreview | null {
+  if (!canvasLinkAllowed(doc, link)) return null
+  return previewLink(doc, link)
+}
+
 /** 拖线时给连接线和画布用的上下文：按当前文档预告「连上会是什么线」。 */
 interface DragContext {
   preview(link: HandleLink): LinkPreview | null
@@ -2150,7 +2206,7 @@ export function Canvas(props: CanvasProps): React.JSX.Element {
       : '',
   )
   const dragInfo = useMemo<DragContext>(
-    () => ({ preview: (link) => previewLink(doc, link), t }),
+    () => ({ preview: (link) => canvasPreviewLink(doc, link), t }),
     [doc, t],
   )
   const drag = useMemo(() => {
@@ -2169,7 +2225,7 @@ export function Canvas(props: CanvasProps): React.JSX.Element {
     const kind = dragKindOf(fromCard, fromHandle)
     const preview =
       valid && toNode !== null
-        ? previewLink(doc, linkOf(fromNode, { id: fromHandle, type: fromType }, toNode, toHandle))
+        ? canvasPreviewLink(doc, linkOf(fromNode, { id: fromHandle, type: fromType }, toNode, toHandle))
         : null
     return { kind, color: preview === null ? dragColor(kind) : PREVIEW_COLOR[preview.kind] }
   }, [dragKey, doc])
@@ -2597,13 +2653,19 @@ export function Canvas(props: CanvasProps): React.JSX.Element {
               }
         const memoryOn = memorySteps.has(idKey(node.id))
         const memoryText = memoryOn ? texts.memOff : texts.memOn
-        signature = `${selected}|${tone}|${note}|${texts.addText}|${texts.fileText}|${role}|${dim}|${used.join(',')}|${memoryOn}|${memoryText}|${memoryToggle}|${stepRun === null ? '' : `${stepRun.status}/${stepRun.round}/${stepRun.edited}/${stepRun.label}/${stepRun.mark}`}`
+        const portsSignature = JSON.stringify({
+          ports: node.data.ports ?? null,
+          bindings: node.data.bindings ?? null,
+        })
+        signature = `${selected}|${tone}|${note}|${texts.addText}|${texts.fileText}|${role}|${dim}|${used.join(',')}|${memoryOn}|${memoryText}|${memoryToggle}|${portsSignature}|${stepRun === null ? '' : `${stepRun.status}/${stepRun.round}/${stepRun.edited}/${stepRun.label}/${stepRun.mark}`}`
         build = () => ({
           id: node.id,
           type: 'wfNode',
           position: moving ?? node.position,
           selected,
           data: {
+            ports: node.data.ports,
+            bindings: node.data.bindings,
             used,
             title:
               node.data.label === undefined || node.data.label === '' ? node.id : node.data.label,
@@ -2765,6 +2827,16 @@ export function Canvas(props: CanvasProps): React.JSX.Element {
       const mode = whenKind(when)
       const back = analysis.backEdges.has(edge.id)
       const handoff = resolveHandoff(edge.data?.handoff)
+      // 计算该边承载的具名数据绑定数量
+      const targetNode = doc.nodes.find((n) => idKey(n.id) === idKey(edge.target))
+      let bindingCount = 0
+      if (targetNode && isStep(targetNode) && targetNode.data.bindings) {
+        for (const b of Object.values(targetNode.data.bindings)) {
+          if (b && idKey(b.node) === idKey(edge.source)) {
+            bindingCount += 1
+          }
+        }
+      }
       // 线色只看条件：选中 / 悬停时描粗、加光晕，不换色——一条线从头到尾就是那一个颜色。
       const color = WHEN_COLOR[mode]
       return reuse({
@@ -2787,6 +2859,7 @@ export function Canvas(props: CanvasProps): React.JSX.Element {
         data: {
           when: mode,
           back,
+          bindingCount,
           text: when === 'pass' ? texts.pass : when === 'fail' ? texts.fail : (when ?? ''),
           handoff:
             !handoff.result || handoff.note !== undefined
@@ -3019,7 +3092,7 @@ export function Canvas(props: CanvasProps): React.JSX.Element {
               onNodesChange={onNodesChange}
               // 两头的连接点分工要对得上（见 model/connect.ts）：不连自己、资源不连资源、
               // 步骤右边只连步骤、步骤底边只连资源、资源只连步骤。
-              isValidConnection={(connection) => linkAllowed(docRef.current, connection)}
+              isValidConnection={(connection) => canvasLinkAllowed(docRef.current, connection)}
               onConnect={(connection) => {
                 onEdit({ type: 'connect', source: connection.source, target: connection.target })
               }}
