@@ -21,7 +21,7 @@ import { defineConfig } from 'tsdown'
 const require_ = createRequire(import.meta.url)
 
 /** Package name — the loader module-table id and the style-tag owner stamp. */
-const ID = '@xiaoso/dsh-workflow-lite'
+const ID = '@xiaoso/dsh-workflow-lite-fork'
 
 /** Platform modules the frozen loader table answers; every other import inlines. */
 const CLIENT_EXTERNALS = [

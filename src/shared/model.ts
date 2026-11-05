@@ -103,7 +103,14 @@ const VIEW_KEYS = [
   'gallery',
 ] as const
 /** edge 的 data 键序。 */
-const EDGE_DATA_KEYS = ['when', 'label', 'handoff', 'update'] as const
+export const EDGE_DATA_KEYS = [
+  'when',
+  'label',
+  'handoff',
+  'update',
+  'sourcePort',
+  'targetPort',
+] as const
 
 /** 坐标归一化：`round(v * 100) / 100`（2 位小数）。 */
 export function normalizeCoord(value: number): number {
@@ -348,6 +355,28 @@ export function normalizeNodeData(raw: unknown): NodeData {
 }
 
 /**
+ * 解析步骤节点的有效端口绑定表（端口级连线优先，未声明则回落节点级 bindings）。
+ */
+export function resolveEffectiveBindings(
+  node: StepNode,
+  doc?: WorkflowDocument,
+): PortBindings {
+  const result: PortBindings = { ...(node.data.bindings ?? {}) }
+  if (doc) {
+    const key = idKey(node.id)
+    for (const edge of doc.edges) {
+      if (idKey(edge.target) === key && edge.data?.targetPort && edge.data?.sourcePort) {
+        result[edge.data.targetPort.trim()] = {
+          node: edge.source,
+          port: edge.data.sourcePort.trim(),
+        }
+      }
+    }
+  }
+  return result
+}
+
+/**
  * 产出的规范写法：空数组 = 未声明；只有一个产出且没有规则 = 写成字符串（老写法，文件保持不变）；
  * 规则是空白的当没写。其余原样（数组顺序永不重排）。
  */
@@ -473,12 +502,14 @@ export function sameHandoff(
   return JSON.stringify(canonicalHandoff(a) ?? null) === JSON.stringify(canonicalHandoff(b) ?? null)
 }
 
-/** 两条边的 `data` 内容是否相同（条件、标签、交接、写入方式）。 */
+/** 两条边的 `data` 内容是否相同（条件、标签、交接、写入方式、源/目标端口）。 */
 export function sameEdgeData(a: EdgeData | undefined, b: EdgeData | undefined): boolean {
   return (
     a?.when === b?.when &&
     a?.label === b?.label &&
     a?.update === b?.update &&
+    a?.sourcePort === b?.sourcePort &&
+    a?.targetPort === b?.targetPort &&
     sameHandoff(a?.handoff, b?.handoff)
   )
 }
@@ -499,6 +530,12 @@ function readEdgeData(raw: unknown): EdgeData | undefined {
   const handoff = readHandoff(raw.handoff)
   if (handoff !== undefined) data.handoff = handoff
   if (raw.update === true) data.update = true
+  if (typeof raw.sourcePort === 'string' && raw.sourcePort.trim() !== '') {
+    data.sourcePort = raw.sourcePort.trim()
+  }
+  if (typeof raw.targetPort === 'string' && raw.targetPort.trim() !== '') {
+    data.targetPort = raw.targetPort.trim()
+  }
   return Object.keys(data).length > 0 ? data : undefined
 }
 

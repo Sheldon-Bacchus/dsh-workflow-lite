@@ -804,6 +804,8 @@ export function checkPorts(ports: NodePorts, nodeId?: string): ValidationProblem
  * - E_BINDING_NO_EDGE：源与目标之间无画布边
  * - E_BINDING_TYPE_INCOMPATIBLE：端口类型不兼容
  * - E_BINDING_REQUIRED_MISSING：必填输入未绑定
+ *
+ * 连线端口绑定（B 方案）与节点级 bindings 并存时，端口级优先，未声明则回落节点级。
  */
 export function checkBindings(
   document: WorkflowDocument,
@@ -815,6 +817,83 @@ export function checkBindings(
     nodeMap.set(idKey(n.id), n)
   }
 
+  // 1. 检查边上直接承载的具名端口绑定（B 方案）
+  const edgeBoundInputsByNode = new Map<string, Set<string>>()
+  for (const edge of document.edges) {
+    const sPort = edge.data?.sourcePort?.trim()
+    const tPort = edge.data?.targetPort?.trim()
+    if (!sPort && !tPort) continue
+
+    const sourceNode = nodeMap.get(idKey(edge.source))
+    const targetNode = nodeMap.get(idKey(edge.target))
+
+    if (!sourceNode) {
+      problems.push(
+        mk(
+          'compile',
+          'E_BINDING_SOURCE_MISSING',
+          `连线 ${edge.id} 的源节点「${edge.source}」不存在`,
+          { edge: edge.id },
+        ),
+      )
+      continue
+    }
+
+    let sourcePortSpec: PortSpec | undefined
+    if (sPort) {
+      const sourceOutputs = (isStep(sourceNode) ? sourceNode.data.ports?.outputs : undefined) ?? []
+      sourcePortSpec = sourceOutputs.find((p) => p.name.trim() === sPort)
+      if (!sourcePortSpec) {
+        problems.push(
+          mk(
+            'compile',
+            'E_BINDING_PORT_MISSING',
+            `源节点 ${edge.source} 不存在输出端口「${sPort}」`,
+            { edge: edge.id, node: edge.source },
+          ),
+        )
+      }
+    }
+
+    let targetPortSpec: PortSpec | undefined
+    if (tPort && targetNode && isStep(targetNode)) {
+      const targetInputs = targetNode.data.ports?.inputs ?? []
+      targetPortSpec = targetInputs.find((p) => p.name.trim() === tPort)
+      if (!targetPortSpec) {
+        problems.push(
+          mk(
+            'compile',
+            'E_BINDING_PORT_MISSING',
+            `目标节点 ${edge.target} 不存在输入端口「${tPort}」`,
+            { edge: edge.id, node: edge.target },
+          ),
+        )
+      } else {
+        const targetKey = idKey(edge.target)
+        let boundSet = edgeBoundInputsByNode.get(targetKey)
+        if (!boundSet) {
+          boundSet = new Set<string>()
+          edgeBoundInputsByNode.set(targetKey, boundSet)
+        }
+        boundSet.add(tPort)
+      }
+    }
+
+    if (sPort && tPort && sourcePortSpec && targetPortSpec) {
+      if (!portTypesCompatible(sourcePortSpec.type, targetPortSpec.type, subtypes)) {
+        problems.push(
+          mk(
+            'compile',
+            'E_BINDING_TYPE_INCOMPATIBLE',
+            `源端口「${sPort}」（类型 ${sourcePortSpec.type}）与目标输入「${tPort}」（类型 ${targetPortSpec.type}）类型不兼容`,
+            { edge: edge.id, node: edge.target },
+          ),
+        )
+      }
+    }
+  }
+
+  // 2. 检查节点级 bindings（未被连线端口级覆盖时回落节点级）以及必填项
   for (const node of document.nodes) {
     if (!isStep(node)) continue
     const inputs = node.data.ports?.inputs ?? []
@@ -826,11 +905,17 @@ export function checkBindings(
     }
 
     const bindings = node.data.bindings ?? {}
+    const edgeBoundSet = edgeBoundInputsByNode.get(idKey(node.id)) ?? new Set<string>()
 
-    // 1. 检查 bindings 中的每一项绑定
+    // 检查 bindings 中的每一项绑定（端口级优先：若连线已声明该 input 绑定，则节点级被覆盖跳过）
     for (const [rawInputName, binding] of Object.entries(bindings)) {
       const inputName = rawInputName.trim()
       const extra = { node: node.id }
+
+      // 如果连线本身已经绑定了该输入端口，端口级优先，回落跳过
+      if (edgeBoundSet.has(inputName)) {
+        continue
+      }
 
       // 本节点无该输入口（未知端口名不静默接受）
       if (!inputMap.has(inputName)) {
@@ -908,10 +993,14 @@ export function checkBindings(
       }
     }
 
-    // 2. 检查必填输入未绑定
+    // 检查必填输入未绑定（有效绑定：连线端口级绑定 或 节点级 binding）
     for (const inputSpec of inputs) {
       if (inputSpec.required === true) {
         const trimmedName = inputSpec.name.trim()
+        const isBoundByEdge = edgeBoundSet.has(trimmedName) || edgeBoundSet.has(inputSpec.name)
+        if (isBoundByEdge) {
+          continue
+        }
         const b = bindings[trimmedName] ?? bindings[inputSpec.name]
         if (
           !b ||

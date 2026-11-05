@@ -9,13 +9,15 @@ import {
   readBindings,
   readDocument,
   readNodeData,
+  resolveEffectiveBindings,
   sameNodeData,
   writeDocument,
 } from '../src/shared/model.ts'
 import type { NodeData, NodePorts, StepNode, WorkflowDocument } from '../src/shared/types.ts'
 import { checkBindings, validateDocument } from '../src/shared/validate.ts'
 import { StepCardPorts } from '../src/client/ui/StepCard.tsx'
-import { StepPortsField } from '../src/client/ui/Inspector.tsx'
+import { EdgePortsField, StepPortsField } from '../src/client/ui/Inspector.tsx'
+import { isValidConnection } from '../src/shared/linkRules.ts'
 
 function doc(partial: Partial<WorkflowDocument> = {}): WorkflowDocument {
   return { nodes: [], edges: [], viewport: { x: 0, y: 0, zoom: 1 }, ...partial }
@@ -645,6 +647,94 @@ describe('fork 具名端口绑定的编辑与持久化 (卡 F3)', () => {
       expect(html).toContain('disabled')
       expect(html).toContain('wl-bind-disabled-reason')
       expect(html).toContain('无可用源节点')
+    })
+  })
+
+  describe('端口级连线绑定 B 方案关键路径 (卡 X3)', () => {
+    it('EdgeData 具名端口持久化与往返保真（sourcePort / targetPort）', () => {
+      const edgeDoc = doc({
+        nodes: [
+          { id: 's1', type: 'wfNode', position: { x: 0, y: 0 }, data: { prompt: 's1' } },
+          { id: 's2', type: 'wfNode', position: { x: 100, y: 0 }, data: { prompt: 's2' } },
+        ],
+        edges: [
+          {
+            id: 's1->s2',
+            source: 's1',
+            target: 's2',
+            sourceHandle: null,
+            targetHandle: null,
+            data: {
+              sourcePort: 'out_fastq',
+              targetPort: 'in_reads',
+            },
+          },
+        ],
+      })
+      const text = writeDocument(edgeDoc)
+      const parsed = readDocument(text)
+      expect(parsed.document).not.toBeNull()
+      expect(parsed.document?.edges[0]?.data?.sourcePort).toBe('out_fastq')
+      expect(parsed.document?.edges[0]?.data?.targetPort).toBe('in_reads')
+      expect(writeDocument(parsed.document!)).toBe(text)
+    })
+
+    it('isValidConnection 在两端具名端口指定时按端口类型校验', () => {
+      const srcNodeData: NodeData = {
+        ports: { outputs: [{ name: 'out_f', type: 'fastq' }, { name: 'out_b', type: 'bam' }] },
+      }
+      const tgtNodeData: NodeData = {
+        ports: { inputs: [{ name: 'in_f', type: 'fastq' }] },
+      }
+      // 兼容端口对返回 true
+      expect(isValidConnection(srcNodeData, tgtNodeData, undefined, 'out_f', 'in_f')).toBe(true)
+      // 不兼容端口对返回 false
+      expect(isValidConnection(srcNodeData, tgtNodeData, undefined, 'out_b', 'in_f')).toBe(false)
+    })
+
+    it('连线端口绑定优先于节点级 bindings（端口级优先，未声明回落节点级）', () => {
+      const testDoc = doc({
+        nodes: [
+          {
+            id: 'src',
+            type: 'wfNode',
+            position: { x: 0, y: 0 },
+            data: {
+              prompt: 'src',
+              ports: { outputs: [{ name: 'out_reads', type: 'fastq' }] },
+            },
+          },
+          {
+            id: 'tgt',
+            type: 'wfNode',
+            position: { x: 200, y: 0 },
+            data: {
+              prompt: 'tgt',
+              ports: { inputs: [{ name: 'in_reads', type: 'fastq', required: true }] },
+              // 节点级填了无效源，但连线端口级覆盖它
+              bindings: { in_reads: { node: 'invalid_node', port: 'invalid_port' } },
+            },
+          },
+        ],
+        edges: [
+          {
+            id: 'src->tgt',
+            source: 'src',
+            target: 'tgt',
+            sourceHandle: null,
+            targetHandle: null,
+            data: { sourcePort: 'out_reads', targetPort: 'in_reads' },
+          },
+        ],
+      })
+      // 有效端口绑定解析结果应为连线端口级覆盖的结果
+      const effective = resolveEffectiveBindings(testDoc.nodes[1] as StepNode, testDoc)
+      expect(effective.in_reads).toEqual({ node: 'src', port: 'out_reads' })
+
+      // validate 规则检查：连线端口级优先覆盖后，节点级 invalid_node 不报 E_BINDING_SOURCE_MISSING，必填项满足
+      const problems = checkBindings(testDoc)
+      expect(problems.filter((p) => p.code === 'E_BINDING_REQUIRED_MISSING')).toHaveLength(0)
+      expect(problems.filter((p) => p.code === 'E_BINDING_SOURCE_MISSING')).toHaveLength(0)
     })
   })
 })

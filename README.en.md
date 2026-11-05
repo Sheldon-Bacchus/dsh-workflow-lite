@@ -50,6 +50,33 @@ dsh web
 
 Once installed, a **Workflow** tab appears at the top of the session page.
 
+### Co-existence & Rollback (Fork Version)
+
+This fork build uses an independent plugin identifier (`workflow-lite-fork` / `@xiaoso/dsh-workflow-lite-fork`), allowing it to be installed alongside the official `@xiaoso/dsh-workflow-lite` plugin in the same DeepSeek Harness environment without conflict.
+
+#### Co-existence Installation
+
+1. **Web**:
+   ```bash
+   dsh plugin --profile web add @xiaoso/dsh-workflow-lite-fork
+   dsh web
+   ```
+2. **Desktop**:
+   Go to sidebar **Plugins** → **Add plugin** → **Install a third-party plugin**, enter `@xiaoso/dsh-workflow-lite-fork`, click **Install**, and restart. Both plugins will have separate workflow tabs and configuration settings.
+
+#### Rollback Steps
+
+To uninstall the fork and revert to using the original plugin only:
+1. **Web**:
+   ```bash
+   dsh plugin --profile web remove workflow-lite-fork
+   # Ensure the original plugin remains active
+   dsh plugin --profile web add @xiaoso/dsh-workflow-lite
+   dsh web
+   ```
+2. **Desktop**:
+   Find `@xiaoso/dsh-workflow-lite-fork` under **Plugins**, click **Uninstall**, and restart DeepSeek Harness. Existing workflow files are preserved in your local data directory and will not be lost.
+
 ## Usage
 
 ### Ask the model

@@ -47,7 +47,7 @@ import type { GraphAnalysis } from '../../shared/graph.ts'
 import { inputKind } from '../../shared/inputs.ts'
 import { MAX_TEXT_CODEPOINTS } from '../../shared/limits.ts'
 import { type MemoryEntry, memoryTitle } from '../../shared/memoryLib.ts'
-import { idKey, isInput, isResource, isStep } from '../../shared/model.ts'
+import { idKey, isInput, isResource, isStep, resolveEffectiveBindings } from '../../shared/model.ts'
 import { linkAllowedByPorts } from '../../shared/linkRules.ts'
 import { codepointLength } from '../../shared/naming.ts'
 import { memoryOf } from '../../shared/presets.ts'
@@ -1834,17 +1834,38 @@ const FileLine = memo(function FileLine(props: EdgeProps<FileEdge>): React.JSX.E
 })
 
 /** 画布上的连线许可判断：合并现有连接点/卡片语义规则与端口兼容规则 */
-function canvasLinkAllowed(doc: WorkflowDocument, link: HandleLink): boolean {
+export function isValidConnection(
+  doc: WorkflowDocument,
+  link: HandleLink & { sourcePort?: string; targetPort?: string },
+  subtypes?: Record<string, string[]>,
+): boolean {
   if (!linkAllowed(doc, link)) return false
   const index = nodeIndex(doc)
   const source = index.get(idKey(link.source))
   const target = index.get(idKey(link.target))
   if (source !== undefined && target !== undefined && isStep(source) && isStep(target)) {
-    if (!linkAllowedByPorts(source.data, target.data)) {
+    const sPort =
+      link.sourcePort ??
+      (link.sourceHandle && link.sourceHandle !== 'out' && link.sourceHandle !== 'file'
+        ? link.sourceHandle
+        : undefined)
+    const tPort =
+      link.targetPort ??
+      (link.targetHandle && link.targetHandle !== 'in' && link.targetHandle !== 'read'
+        ? link.targetHandle
+        : undefined)
+    if (!linkAllowedByPorts(source.data, target.data, subtypes, sPort, tPort)) {
       return false
     }
   }
   return true
+}
+
+function canvasLinkAllowed(
+  doc: WorkflowDocument,
+  link: HandleLink & { sourcePort?: string; targetPort?: string },
+): boolean {
+  return isValidConnection(doc, link)
 }
 
 function canvasPreviewLink(doc: WorkflowDocument, link: HandleLink): LinkPreview | null {
@@ -2653,9 +2674,10 @@ export function Canvas(props: CanvasProps): React.JSX.Element {
               }
         const memoryOn = memorySteps.has(idKey(node.id))
         const memoryText = memoryOn ? texts.memOff : texts.memOn
+        const effectiveBindings = resolveEffectiveBindings(node, doc)
         const portsSignature = JSON.stringify({
           ports: node.data.ports ?? null,
-          bindings: node.data.bindings ?? null,
+          bindings: effectiveBindings,
         })
         signature = `${selected}|${tone}|${note}|${texts.addText}|${texts.fileText}|${role}|${dim}|${used.join(',')}|${memoryOn}|${memoryText}|${memoryToggle}|${portsSignature}|${stepRun === null ? '' : `${stepRun.status}/${stepRun.round}/${stepRun.edited}/${stepRun.label}/${stepRun.mark}`}`
         build = () => ({
@@ -2665,7 +2687,7 @@ export function Canvas(props: CanvasProps): React.JSX.Element {
           selected,
           data: {
             ports: node.data.ports,
-            bindings: node.data.bindings,
+            bindings: effectiveBindings,
             used,
             title:
               node.data.label === undefined || node.data.label === '' ? node.id : node.data.label,
@@ -2827,11 +2849,12 @@ export function Canvas(props: CanvasProps): React.JSX.Element {
       const mode = whenKind(when)
       const back = analysis.backEdges.has(edge.id)
       const handoff = resolveHandoff(edge.data?.handoff)
-      // 计算该边承载的具名数据绑定数量
+      // 计算该边承载的具名数据绑定数量（端口级优先，回落节点级）
       const targetNode = doc.nodes.find((n) => idKey(n.id) === idKey(edge.target))
       let bindingCount = 0
-      if (targetNode && isStep(targetNode) && targetNode.data.bindings) {
-        for (const b of Object.values(targetNode.data.bindings)) {
+      if (targetNode && isStep(targetNode)) {
+        const effective = resolveEffectiveBindings(targetNode, doc)
+        for (const b of Object.values(effective)) {
           if (b && idKey(b.node) === idKey(edge.source)) {
             bindingCount += 1
           }

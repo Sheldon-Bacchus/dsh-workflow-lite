@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { WORKFLOW_LITE_PACKAGE_NAME } from './config.ts'
 
 const PACKAGE_NAME = '@xiaoso/dsh-workflow-lite'
 
@@ -20,7 +21,11 @@ export function pluginVersion(from: string = import.meta.url): string {
       const raw = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as unknown
       if (typeof raw === 'object' && raw !== null) {
         const { name, version } = raw as { name?: unknown; version?: unknown }
-        if (name === PACKAGE_NAME && typeof version === 'string') return version
+        if (
+          (name === PACKAGE_NAME || name === WORKFLOW_LITE_PACKAGE_NAME) &&
+          typeof version === 'string'
+        )
+          return version
       }
     } catch {
       // 这一层没有：再往上找。

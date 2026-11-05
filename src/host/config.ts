@@ -18,8 +18,12 @@ import z from '@deepseek-ai/schemastery'
 /** 设置命名空间——同一个 kebab-case 串也是 locale 的 NS。 */
 export const WORKFLOW_LITE_SETTINGS_NS = 'workflow-lite'
 
+/** 插件标识常量：fork 产物独立标识（后缀 -fork），避免与原插件同时安装时冲突。 */
+export const WORKFLOW_LITE_PLUGIN_ID = 'workflow-lite-fork'
+export const WORKFLOW_LITE_PACKAGE_NAME = '@xiaoso/dsh-workflow-lite-fork'
+
 /** 插件在 profile 里的那一行的 id（`cordis.patch.yml` 的 `insert.id`）。 */
-export const WORKFLOW_LITE_ROW_ID = 'workflow-lite'
+export const WORKFLOW_LITE_ROW_ID = WORKFLOW_LITE_PLUGIN_ID
 
 /** 解析后的活配置。 */
 export interface WorkflowLiteSettings {

@@ -24,4 +24,16 @@ dsh web
 
 After a successful install, a **Workflows** tab appears at the top of the session page. If it does not, see the [FAQ](/dsh-workflow-lite/en/faq/).
 
+## Co-existence & Rollback (Fork Version)
+
+This fork build uses an independent identifier (`workflow-lite-fork` / `@xiaoso/dsh-workflow-lite-fork`) and can be installed alongside the official plugin.
+
+### Co-existence Installation
+- **Web**: `dsh plugin --profile web add @xiaoso/dsh-workflow-lite-fork && dsh web`
+- **Desktop**: Under **Plugins** → install third-party plugin, enter `@xiaoso/dsh-workflow-lite-fork`, install and restart.
+
+### Rollback Steps
+- **Web**: Run `dsh plugin --profile web remove workflow-lite-fork`.
+- **Desktop**: Find `@xiaoso/dsh-workflow-lite-fork` under **Plugins**, click **Uninstall** and restart. Local workflow documents are preserved and will not be lost.
+
 Next: [Create your first workflow](/dsh-workflow-lite/en/start/first-workflow/).

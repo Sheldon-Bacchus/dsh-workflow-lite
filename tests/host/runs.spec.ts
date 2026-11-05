@@ -1349,6 +1349,7 @@ describe('statRunPath：大文件夹', () => {
     const first = await statRunPath(dir, 'folder')
     expect(first?.size).toBe(100)
     // 覆盖写最近的那份：文件夹自己的时间不变，报的修改时间跟着变。
+    await new Promise((resolve) => setTimeout(resolve, 25))
     await writeFile(join(dir, 'f099.txt'), 'again')
     const touched = await statRunPath(dir, 'folder')
     expect(touched?.size).toBe(100)

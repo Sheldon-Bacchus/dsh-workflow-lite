@@ -63,6 +63,10 @@ import type {
  */
 export const API_CHANNEL = '/api'
 
+/** fork 独立插件标识常量（后缀 -fork），避免与原插件同时安装时冲突。 */
+export const WORKFLOW_LITE_FORK_PLUGIN_ID = 'workflow-lite-fork'
+export const WORKFLOW_LITE_FORK_PACKAGE_NAME = '@xiaoso/dsh-workflow-lite-fork'
+
 /** 本插件在 `/api` 下的命名空间（＝ `/api/<namespace>/<endpoint>` 里的那一段）。 */
 export const WORKFLOW_LITE_CHANNEL = 'workflow-lite'
 

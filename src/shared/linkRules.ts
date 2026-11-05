@@ -90,6 +90,7 @@ export function portTypesCompatible(
  * - 两端任一方未声明 ports 时返回 true（完全兼容老图）；
  * - 都有端口声明时：
  *   - 任一端声明了 ports 但对应方向为空（source 无 outputs 或 target 无 inputs）→ false；
+ *   - 若指定了 sourcePort / targetPort，按指定端口过滤；
  *   - 存在 source.outputs 中某口与 target.inputs 中某口类型兼容才返回 true；
  *   - 其余无匹配端口情况返回 false。
  *
@@ -99,6 +100,8 @@ export function linkAllowedByPorts(
   source: NodeData,
   target: NodeData,
   subtypes?: Record<string, string[]>,
+  sourcePort?: string,
+  targetPort?: string,
 ): boolean {
   // 两端任一方未声明 ports 时放行（兼容旧图）
   if (source.ports === undefined || target.ports === undefined) {
@@ -113,9 +116,25 @@ export function linkAllowedByPorts(
     return false
   }
 
+  const sName =
+    typeof sourcePort === 'string' && sourcePort.trim() !== '' ? sourcePort.trim() : undefined
+  const tName =
+    typeof targetPort === 'string' && targetPort.trim() !== '' ? targetPort.trim() : undefined
+
+  const filteredOutputs = sName
+    ? outputs.filter((p) => p.name.trim() === sName)
+    : outputs
+  const filteredInputs = tName
+    ? inputs.filter((p) => p.name.trim() === tName)
+    : inputs
+
+  if (filteredOutputs.length === 0 || filteredInputs.length === 0) {
+    return false
+  }
+
   // 判断是否存在至少一对兼容端口（多口取交集）
-  for (const outPort of outputs) {
-    for (const inPort of inputs) {
+  for (const outPort of filteredOutputs) {
+    for (const inPort of filteredInputs) {
       if (portTypesCompatible(outPort.type, inPort.type, subtypes)) {
         return true
       }
@@ -123,4 +142,17 @@ export function linkAllowedByPorts(
   }
 
   return false
+}
+
+/**
+ * 连线有效性校验函数：在两端都声明 ports 时按端口类型校验（支持指定具名端口）。
+ */
+export function isValidConnection(
+  source: NodeData,
+  target: NodeData,
+  subtypes?: Record<string, string[]>,
+  sourcePort?: string,
+  targetPort?: string,
+): boolean {
+  return linkAllowedByPorts(source, target, subtypes, sourcePort, targetPort)
 }

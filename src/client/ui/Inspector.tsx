@@ -757,6 +757,124 @@ export function edgeSwap(
   return { key: `${idKey(edge.source)}->${idKey(edge.target)}`, at }
 }
 
+export interface EdgePortsFieldProps {
+  edge: WorkflowEdge
+  source?: WorkflowNode
+  target?: WorkflowNode
+  subtypes?: Record<string, string[]>
+  onEdit(action: Edit): void
+}
+
+/**
+ * 连线端口选择器（端口级连线 B 方案）：
+ * 选中步骤间连线时，可选择源输出端口与目标输入端口。
+ * 未声明端口或未选时回落节点级。
+ */
+export function EdgePortsField(props: EdgePortsFieldProps): React.JSX.Element | null {
+  const { edge, source, target, onEdit, subtypes } = props
+  if (!source || !target || !isStep(source) || !isStep(target)) return null
+  const sourceOutputs = source.data.ports?.outputs ?? []
+  const targetInputs = target.data.ports?.inputs ?? []
+  if (sourceOutputs.length === 0 && targetInputs.length === 0) return null
+
+  const currentSourcePort = edge.data?.sourcePort ?? ''
+  const currentTargetPort = edge.data?.targetPort ?? ''
+
+  return (
+    <section className={css.field} data-testid="wl-edge-ports">
+      <div className={css.label}>
+        <span>端口绑定</span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <span style={{ fontSize: 'var(--wl-fs-micro, 11px)', color: 'var(--wl-text-3)' }}>
+            源端口（{titleOf(source, edge.source)} 输出）
+          </span>
+          <select
+            aria-label="源端口"
+            data-testid="wl-edge-source-port-select"
+            className={ui.input}
+            value={currentSourcePort}
+            style={{
+              fontSize: 'var(--wl-fs-meta, 12px)',
+              padding: '4px 8px',
+              borderRadius: 'calc(4px * var(--wl-round, 1))',
+              background: 'var(--wl-panel)',
+              color: 'var(--wl-text)',
+              border: '1px solid var(--wl-line, rgba(255, 255, 255, 0.15))',
+            }}
+            onChange={(e) => {
+              const val = e.currentTarget.value
+              onEdit({
+                type: 'setEdgePorts',
+                id: edge.id,
+                sourcePort: val || undefined,
+                targetPort: currentTargetPort || undefined,
+              })
+            }}
+          >
+            <option value="">-- 未指定（回落节点级）--</option>
+            {sourceOutputs.map((p) => (
+              <option key={`src-${p.name}`} value={p.name}>
+                {p.name} ({p.type})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <span style={{ fontSize: 'var(--wl-fs-micro, 11px)', color: 'var(--wl-text-3)' }}>
+            目标端口（{titleOf(target, edge.target)} 输入）
+          </span>
+          <select
+            aria-label="目标端口"
+            data-testid="wl-edge-target-port-select"
+            className={ui.input}
+            value={currentTargetPort}
+            style={{
+              fontSize: 'var(--wl-fs-meta, 12px)',
+              padding: '4px 8px',
+              borderRadius: 'calc(4px * var(--wl-round, 1))',
+              background: 'var(--wl-panel)',
+              color: 'var(--wl-text)',
+              border: '1px solid var(--wl-line, rgba(255, 255, 255, 0.15))',
+            }}
+            onChange={(e) => {
+              const val = e.currentTarget.value
+              onEdit({
+                type: 'setEdgePorts',
+                id: edge.id,
+                sourcePort: currentSourcePort || undefined,
+                targetPort: val || undefined,
+              })
+            }}
+          >
+            <option value="">-- 未指定（回落节点级）--</option>
+            {targetInputs.map((p) => (
+              <option key={`tgt-${p.name}`} value={p.name}>
+                {p.name} ({p.type})
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {currentSourcePort && currentTargetPort && (
+          <div
+            data-testid="wl-edge-ports-status"
+            style={{
+              fontSize: 'var(--wl-fs-micro, 11px)',
+              color: 'var(--wl-text-2)',
+              marginTop: 2,
+            }}
+          >
+            已绑定：<code>{currentSourcePort}</code> → <code>{currentTargetPort}</code>
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
 function EdgePanel(props: InspectorProps & { edge: WorkflowEdge }): React.JSX.Element {
   const { t, edge, doc, analysis, onEdit, onSelect } = props
   const spot = edgeSwap(doc, edge)
@@ -843,6 +961,8 @@ function EdgePanel(props: InspectorProps & { edge: WorkflowEdge }): React.JSX.El
           <ResourceEdgeBody t={t} edge={edge} kind={kind} onEdit={onEdit} />
         ) : (
           <>
+            <EdgePortsField edge={edge} source={source} target={target} onEdit={onEdit} />
+
             <section className={css.field}>
               <div className={css.label}>
                 <span>{t('edge.when')}</span>

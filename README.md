@@ -50,6 +50,34 @@ dsh web
 
 安装完成后，会话页顶部会出现「**工作流**」标签页。
 
+### 与原插件并存安装与回退（Fork 版本）
+
+本 fork 产物采用独立插件标识（Plugin ID：`workflow-lite-fork` / 包名：`@xiaoso/dsh-workflow-lite-fork`），支持与官方原版插件 `@xiaoso/dsh-workflow-lite` 同时安装在同一个 DeepSeek Harness 环境中并存使用，互不冲突。
+
+#### 并存安装
+
+1. **网页版**：
+   ```bash
+   dsh plugin --profile web add @xiaoso/dsh-workflow-lite-fork
+   dsh web
+   ```
+2. **桌面端**：
+   在侧边栏「**插件**」→「**添加插件**」→「**安装第三方插件**」中填入 `@xiaoso/dsh-workflow-lite-fork`，点击「**安装**」并重启。
+   安装后，会话页中 fork 版本与原版插件将拥有各自独立的「工作流」标签页与配置。
+
+#### 回退步骤
+
+如需卸载 fork 插件并回退到仅使用原版插件：
+1. **网页版**：
+   ```bash
+   dsh plugin --profile web remove workflow-lite-fork
+   # 确保原版插件仍在
+   dsh plugin --profile web add @xiaoso/dsh-workflow-lite
+   dsh web
+   ```
+2. **桌面端**：
+   在侧边栏「**插件**」列表中找到 `@xiaoso/dsh-workflow-lite-fork`，点击「**卸载**」并重启即可。工作流数据均保存在本地数据目录，卸载 fork 插件不会丢失任何已有工作流文件。
+
 ## 使用
 
 ### 让模型创建

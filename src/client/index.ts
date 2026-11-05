@@ -23,6 +23,7 @@ import {
   type UiWorkspaceService,
   type WorkspacesService,
 } from './app/sessions.ts'
+import { WORKFLOW_LITE_FORK_PLUGIN_ID } from '../shared/wire.ts'
 import { en, NS, zh } from './i18n.ts'
 import { createWorkflowLiteRpc, requireRpcCarrier } from './rpc.ts'
 import { WorkflowView, type WorkflowViewInjected } from './ui/WorkflowView.tsx'
@@ -76,7 +77,7 @@ export function apply(ctx: ClientContext): void {
     ctx.slots.register(
       {
         name: 'conversation.view',
-        id: 'workflow-lite',
+        id: WORKFLOW_LITE_FORK_PLUGIN_ID,
         order: 20,
         label: () =>
           ctx.locale.getLocale().active.startsWith('zh') ? zh['tab.label'] : en['tab.label'],

@@ -200,6 +200,8 @@ export type Edit =
   | { type: 'setHandoff'; id: string; handoff: Handoff | false | undefined; merge?: string }
   /** 改写入方式（步骤 → 资源）：整份写出 / 在原文件上更新。 */
   | { type: 'setUpdate'; id: string; update: boolean }
+  /** 改连线具名端口（步骤 → 步骤）：设置源端口与目标端口。 */
+  | { type: 'setEdgePorts'; id: string; sourcePort?: string; targetPort?: string }
   /** 视口是视图状态：照样落盘，但不进撤销栈。 */
   /** 换掉整份工作流设置（设置对话框「完成」时一次交出来 = 一条撤销步）。 */
   | { type: 'setSettings'; settings: WorkflowSettings | undefined }
@@ -653,6 +655,34 @@ function applyEdit(doc: WorkflowDocument, selection: Selection, edit: Edit): App
       if (edge === undefined || (edge.data?.update === true) === edit.update) return null
       const { update: _old, ...rest } = edge.data ?? {}
       const replaced = withEdgeData(edge, edit.update ? { ...rest, update: true } : rest)
+      return {
+        doc: {
+          ...doc,
+          edges: doc.edges.map((candidate) => (candidate === edge ? replaced : candidate)),
+        },
+        selection,
+      }
+    }
+
+    case 'setEdgePorts': {
+      const edge = findEdge(doc, edit.id)
+      if (edge === undefined) return null
+      const sPort =
+        typeof edit.sourcePort === 'string' && edit.sourcePort.trim() !== ''
+          ? edit.sourcePort.trim()
+          : undefined
+      const tPort =
+        typeof edit.targetPort === 'string' && edit.targetPort.trim() !== ''
+          ? edit.targetPort.trim()
+          : undefined
+      if (edge.data?.sourcePort === sPort && edge.data?.targetPort === tPort) return null
+      const { sourcePort: _oldS, targetPort: _oldT, ...rest } = edge.data ?? {}
+      const nextData: EdgeData = {
+        ...rest,
+        ...(sPort !== undefined ? { sourcePort: sPort } : {}),
+        ...(tPort !== undefined ? { targetPort: tPort } : {}),
+      }
+      const replaced = withEdgeData(edge, nextData)
       return {
         doc: {
           ...doc,
